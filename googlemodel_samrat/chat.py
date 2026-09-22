@@ -7,6 +7,7 @@ Fully LCEL-compatible: inherits from BaseChatModel, supports
 from __future__ import annotations
 
 import os
+import warnings
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional
 
 from langchain_core.callbacks import (
@@ -144,6 +145,15 @@ class ChatGoogleGenerativeAI(BaseChatModel, RotationExecutionMixin):
         extras = getattr(self, "model_extra", None) or {}
         kwargs.update(extras)
 
+        # Silence known-harmless langchain_google_genai UserWarnings
+        # (fixed-sampling notices, AFC reminders, etc.) that fire when
+        # certain models are constructed.
+        if self.suppress_warnings:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=r".*fixed sampling defaults.*")
+                warnings.filterwarnings("ignore", message=r".*sampling parameter.*will be ignored.*")
+                warnings.filterwarnings("ignore", category=UserWarning, module=r"langchain_google_genai.*")
+                return _LC(**kwargs)
         return _LC(**kwargs)
 
     # ── non-streaming (sync) ─────────────────────────────────────────

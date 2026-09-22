@@ -185,7 +185,7 @@ def test_daily_quota_detection():
 def test_daily_quota_uses_midnight_sleep():
     mgr = RateLimitManager(api_keys=["k1", "k2"], models=["m1"], daily_sleep=True)
     mgr.mark_failed("k1", "m1", Exception("429 daily quota exceeded for the day"))
-    st = mgr._key_state["k1"]
+    st = mgr._pair_state[("k1", "m1")]
     assert st.daily_until > time.time() + 60 * 60
     assert abs(st.daily_until - _next_midnight_ts()) < 5
 
@@ -195,7 +195,7 @@ def test_daily_sleep_can_be_disabled():
         api_keys=["k1", "k2"], models=["m1"], daily_sleep=False, cooldown_seconds=1
     )
     mgr.mark_failed("k1", "m1", Exception("429 daily quota exceeded for the day"))
-    st = mgr._key_state["k1"]
+    st = mgr._pair_state[("k1", "m1")]
     assert st.daily_until == 0
     assert st.cooldown_until > time.time()
 

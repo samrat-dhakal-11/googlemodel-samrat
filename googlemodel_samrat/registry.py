@@ -11,18 +11,24 @@ IMPORTANT NOTES:
 # ============================================================
 # 1. CHAT / TEXT / REASONING MODELS (Latest to Oldest)
 # ============================================================
+# Order = failover priority.
+# Alternates FAST (high-RPD) with POWERFUL (low-RPD) so the first
+# request succeeds on a fast model, and the first *fallback* still
+# gets a capable model rather than another fast one that's also spent.
 CHAT_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.1-pro-preview",
-    "gemini-3-flash-preview",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-1.5-flash-latest",
+    # Order = failover priority. Alternating fast/heavy.
+    "gemini-3.5-flash-lite",       # 1.  fast  — first choice
+    "gemini-3.8-flash",            # 2.  heavy — next
+    "gemini-3.1-flash-lite",       # 3.  fast
+    "gemini-3.1-pro-preview",      # 4.  heavy
+    "gemini-2.5-flash-lite",       # 5.  fast
+    "gemini-3-flash-preview",      # 6.  heavy
+    "gemini-2.5-flash",            # 7.  fast
+    "gemini-3.7-flash",            # 8.  heavy
+    "gemini-3.5-flash",            # 9.  fast
+    "gemini-3.6-flash",            # 10. heavy
+    "gemini-2.5-pro",              # 11. heavy
+    "gemini-1.5-flash-latest",     # 12. last resort
 ]
 
 TEXT_MODELS = CHAT_MODELS

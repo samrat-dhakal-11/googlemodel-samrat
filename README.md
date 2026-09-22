@@ -1,19 +1,5 @@
 # 🚀 googlemodel-samrat
 
-
-## 🆕 What's new in v0.1.4
-
-- **LCEL-native chat client** — `ChatGoogleGenerativeAI` now subclasses `BaseChatModel`, so `prompt | llm | parser` just works.
-- **Streaming** — `.stream()` / `.astream()` yield `AIMessageChunk`s; fallback retries mid-stream if the first chunk fails.
-- **Async** — `.ainvoke()` / `.astream()` supported end-to-end.
-- **Thread-safe rotation** — `RateLimitManager` uses timestamped per-resource cooldowns, safe for FastAPI/Flask.
-- **Embeddings rotation** — new `GoogleGenerativeAIEmbeddings` uses the same multi-key failover engine.
-- **Attribution metadata** — `llm.last_successful_model`, `llm.last_successful_key_index`.
-- **Friendly errors** — `AllResourcesExhaustedError` includes troubleshooting tips.
-- **Midnight sleep** — daily-quota 429s sleep until next UTC midnight instead of retrying forever.
-- **Type hints + `py.typed`** — smooth IDE support.
-- **40+ mock tests** — `pytest tests/ -v` runs in under 1 second with no network.
-
 > **Intelligent Gemini model discovery, multi-key rotation, automatic model fallback, and LangChain integration for Python.**
 
 `googlemodel-samrat` is a Python library designed to make working with the **Google Gemini ecosystem** more resilient and convenient.
@@ -21,6 +7,62 @@
 It provides utilities for selecting the latest available Gemini models, rotating between multiple API keys, falling back between models when errors occur, and integrating Gemini models into **LangChain-based applications**.
 
 The library is particularly useful for applications that need to handle API quota limits, temporary server failures, model availability changes, and multiple Gemini models without manually implementing complex fallback logic.
+
+---
+
+## 🆕 What's new in v0.1.5
+
+- **Per (key, model) pair cooldowns** — a 429 on one pair no longer blocks the same key on other models, nor the same model on other keys. Rotation now works in *both* directions, even with a single key.
+- **UTC midnight reset** — daily-quota 429s now sleep the pair until the next **00:00 UTC**, matching Google's actual reset window more closely for users worldwide.
+- **Visible rotation logs** — `Initializing <model> ......` and `[quota] <model> x key ...XXXX sleeping for Ns` are printed on stdout, so users see exactly when rotation happens.
+- **Singular `api_key=` / `model=`** — sugar for `api_keys=[...]` / `models=[...]`. Both forms work on `ChatGoogleGenerativeAI` and `GoogleGenerativeAIEmbeddings`.
+- **`chatmodel()` now returns `gemini-3.5-flash-lite`** — fast, high-quota, low latency. Heavier models are fallbacks.
+- **Alternating fast/heavy model priority** — the registry orders models as *fast → heavy → fast → heavy* so the first answer is snappy and the first fallback is still capable.
+- **163 unit tests + 64-check stress test** — `pytest tests/ -q` runs in ~1 second, `python3 scripts/stress_test.py` runs 64 checks in ~0.5 s (offline).
+- **Timezone-aware `datetime`** — no deprecation warnings on Python 3.12+.
+- **`shortest_wait()` and `stats`** now account for pair cooldowns.
+
+---
+
+## 📜 Changelog
+
+### v0.1.5 — *current*
+- Per `(api_key, model)` pair cooldowns for 429s
+- `_next_midnight_ts()` returns next 00:00 UTC (timezone-aware)
+- Visible rotation logs on stdout (`Initializing ...`, `[quota] ...`, `Response from model: ...`)
+- `api_key=` / `model=` singular sugar for both chat and embeddings
+- `CHAT_MODELS` reordered: alternating fast/heavy, `gemini-3.5-flash-lite` first
+- `shortest_wait()` and `stats` include pair cooldowns
+- 163 unit tests; `scripts/stress_test.py` (64 checks)
+- Type-safe: `py.typed`, fully annotated public API
+
+### v0.1.4
+- `ChatGoogleGenerativeAI` subclasses LangChain's `BaseChatModel` — **LCEL native** (`prompt | llm | parser`)
+- `.stream()` / `.astream()` with mid-stream fallback
+- `.ainvoke()` / `.astream()` async support
+- Thread-safe `RateLimitManager` with timestamped per-resource cooldowns
+- New `GoogleGenerativeAIEmbeddings` with rotation
+- Attribution: `llm.last_successful_model`, `llm.last_successful_key_index`
+- Friendly `AllResourcesExhaustedError` with troubleshooting tips
+- "Midnight sleep" for daily-quota 429s
+- `py.typed` + full type hints
+- 36 unit tests + `scripts/verify.py`
+
+### v0.1.3
+- Initial public release of the model registry (12 categories, ~45 models)
+- Multi-key rotation on 429
+- Model fallback on 404
+- Basic `ChatGoogleGenerativeAI` wrapper
+
+### v0.1.2
+- Registry expansion
+- Helper getters (`chatmodel()`, `embeddingmodel()`, etc.)
+
+### v0.1.1
+- Initial `pyproject.toml` and packaging
+
+### v0.1.0
+- Proof-of-concept release
 
 ---
 
@@ -42,7 +84,8 @@ API Key 2
 API Key 3
     ↓
 Continue Request
-```
+````
+
 
 This helps applications remain operational when an individual API key reaches its available quota.
 
@@ -50,38 +93,76 @@ This helps applications remain operational when an individual API key reaches it
 
 ### 🤖 Smart Model Fallback
 
-The library maintains model lists ordered from **latest to oldest**.
+The library maintains model lists ordered from **fastest to heaviest** (alternating).
 
-When a model becomes unavailable or encounters a model-specific error, the system can move through the configured model list instead of immediately terminating the request.
+When a model becomes unavailable or encounters a model-specific error, the system moves through the configured model list instead of immediately terminating the request.
 
-```text
-Latest Model
-     ↓
-Model Error
-     ↓
-Next Model
-     ↓
-Model Error
-     ↓
-Older Stable Model
-     ↓
+
+```
+gemini-3.5-flash-lite     (fast, first choice)
+    ↓
+gemini-3.8-flash          (heavy, next)
+    ↓
+gemini-3.1-flash-lite     (fast)
+    ↓
+gemini-3.1-pro-preview    (heavy)
+    ↓
+...
+    ↓
 Successful Response
 ```
+
 
 ---
 
 ### 🔄 Intelligent Error Classification
 
-The library is designed to distinguish between different types of failures.
+The library distinguishes between different failure types and cools the appropriate resource.
 
-| Error Type                     | Typical Response        |
-| ------------------------------ | ----------------------- |
-| `429` / Quota                  | Rotate API key          |
-| Model unavailable / deprecated | Rotate model            |
-| `502` / `503`                  | Rotate key and/or model |
-| Successful request             | Continue normally       |
+| Error TypeWhat cools down      |                                |
+| ------------------------------ | ------------------------------ |
+| `429` / per-minute quota       | The `(key, model)` pair        |
+| `429` / *daily* quota          | The pair, until next 00:00 UTC |
+| Model unavailable / deprecated | The model only                 |
+| `502` / `503` / timeout        | The key only                   |
+| Successful request             | Nothing — normal flow          |
 
-This provides a more resilient request strategy than relying on a single API key and model.
+Cooling a **pair** means: the same key can immediately serve a *different* model, and the same model can immediately be served by a *different* key. This is what makes single-key multi-model rotation work.
+
+---
+
+### 📢 Visible Rotation Logs
+
+By default, rotation is silent. With `verbose=True`, every fallback step is printed to stdout:
+
+
+```
+from googlemodel_samrat import ChatGoogleGenerativeAI
+
+llm = ChatGoogleGenerativeAI(api_key="...", verbose=True)
+llm.invoke("Hello")
+```
+
+
+Output:
+
+
+```
+Initializing gemini-3.5-flash-lite ......
+Response from model: gemini-3.5-flash-lite
+```
+
+
+If the first model is quota-capped:
+
+
+```
+Initializing gemini-3.5-flash-lite ......
+[quota] gemini-3.5-flash-lite x key ...QZYg sleeping for 60s
+Initializing gemini-3.8-flash ......
+Response from model: gemini-3.8-flash
+```
+
 
 ---
 
@@ -89,9 +170,8 @@ This provides a more resilient request strategy than relying on a single API key
 
 Designed to work with the LangChain Gemini ecosystem and provide a convenient interface for conversational applications.
 
-Example:
 
-```python
+```
 from googlemodel_samrat import ChatGoogleGenerativeAI
 
 llm = ChatGoogleGenerativeAI()
@@ -101,309 +181,328 @@ response = llm.invoke("What is the capital of Nepal?")
 print(response.content)
 ```
 
+
+Fully LCEL-compatible:
+
+
+```
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+chain = PromptTemplate.from_template("Tell me about {topic}") | llm | StrOutputParser()
+print(chain.invoke({"topic": "GenAI"}))
+```
+
+
 ---
 
 # 📦 Installation
 
 Install the published package from PyPI:
 
-```bash
+
+```
 pip install googlemodel-samrat
 ```
 
-> **Note:** `googlemodel-samrat` is the PyPI distribution name. The Python import namespace is `googlemodel_samrat`.
+
+> **Note:** `googlemodel-samrat` is the PyPI distribution name. The Python import namespace is `googlemodel_samrat`.
+
+Optional dev dependencies:
+
+
+```
+pip install "googlemodel-samrat[dev]"
+```
+
 
 After installation:
 
-```python
+
+```
 import googlemodel_samrat
 ```
+
 
 ---
 
 # 🧩 Model Categories
 
-`googlemodel-samrat` organizes Gemini-related models into **12 categories**.
+`googlemodel-samrat` organizes Gemini-related models into **12 categories**.
 
 Each category provides a constant containing its model list and, where applicable, a helper function for retrieving the highest-priority model.
 
-|  # | Category         | Helper               | Constant              | Purpose                            |
-| -: | ---------------- | -------------------- | --------------------- | ---------------------------------- |
-|  1 | 💬 Chat          | `chatmodel()`        | `CHAT_MODELS`         | Conversational and multimodal LLMs |
-|  2 | 📝 Text          | —                    | `TEXT_MODELS`         | Text-focused and legacy models     |
-|  3 | 🎙️ Audio        | `audiomodel()`       | `AUDIO_MODELS`        | Speech, transcription, and audio   |
-|  4 | 🖼️ Image        | `imagemodel()`       | `IMAGE_MODELS`        | Image generation and visual models |
-|  5 | 🎬 Video         | `videomodel()`       | `VIDEO_MODELS`        | Video generation and processing    |
-|  6 | 🔢 Embedding     | `embeddingmodel()`   | `EMBEDDING_MODELS`    | Vector embeddings                  |
-|  7 | 🎵 Music         | `musicmodel()`       | `MUSIC_MODELS`        | Music generation                   |
-|  8 | 🤖 Robotics      | `roboticsmodel()`    | `ROBOTICS_MODELS`     | Robotics and embodied reasoning    |
-|  9 | 🖥️ Computer Use | `computerusemodel()` | `COMPUTER_USE_MODELS` | UI and computer interaction        |
-| 10 | 🔬 Research      | `researchmodel()`    | `RESEARCH_MODELS`     | Research and long-form analysis    |
-| 11 | 🧠 Agent         | `agentmodel()`       | `AGENT_MODELS`        | Agents and autonomous workflows    |
-| 12 | 🦙 Gemma         | `gemmamodel()`       | `GEMMA_MODELS`        | Open-weight Gemma models           |
+| #CategoryHelperConstantPurpose |                  |                      |                       |                                    |
+| ------------------------------ | ---------------- | -------------------- | --------------------- | ---------------------------------- |
+| 1                              | 💬 Chat          | `chatmodel()`        | `CHAT_MODELS`         | Conversational and multimodal LLMs |
+| 2                              | 📝 Text          | —                    | `TEXT_MODELS`         | Text-focused and legacy models     |
+| 3                              | 🎙️ Audio        | `audiomodel()`       | `AUDIO_MODELS`        | Speech, transcription, and audio   |
+| 4                              | 🖼️ Image        | `imagemodel()`       | `IMAGE_MODELS`        | Image generation and visual models |
+| 5                              | 🎬 Video         | `videomodel()`       | `VIDEO_MODELS`        | Video generation and processing    |
+| 6                              | 🔢 Embedding     | `embeddingmodel()`   | `EMBEDDING_MODELS`    | Vector embeddings                  |
+| 7                              | 🎵 Music         | `musicmodel()`       | `MUSIC_MODELS`        | Music generation                   |
+| 8                              | 🤖 Robotics      | `roboticsmodel()`    | `ROBOTICS_MODELS`     | Robotics and embodied reasoning    |
+| 9                              | 🖥️ Computer Use | `computerusemodel()` | `COMPUTER_USE_MODELS` | UI and computer interaction        |
+| 10                             | 🔬 Research      | `researchmodel()`    | `RESEARCH_MODELS`     | Research and long-form analysis    |
+| 11                             | 🧠 Agent         | `agentmodel()`       | `AGENT_MODELS`        | Agents and autonomous workflows    |
+| 12                             | 🦙 Gemma         | `gemmamodel()`       | `GEMMA_MODELS`        | Open-weight Gemma models           |
 
 ---
 
 # 📋 Model Registry
 
+The registry lists are ordered by **rotation priority**, alternating fast and heavy models so that the first request is fast and the first fallback is still capable.
+
 ## 1. 💬 Chat Models
 
-**Constant:** `CHAT_MODELS`
+**Constant:** `CHAT_MODELS`
 
-Primary conversational and multimodal models.
 
-```text
-gemini-3.8-flash
-gemini-3.5-flash
-gemini-3.1-pro-preview
-gemini-3-flash-preview
-gemini-2.5-pro
-gemini-2.5-flash
-gemini-2.5-flash-lite
 ```
+gemini-3.5-flash-lite       (fast, high RPD)
+gemini-3.8-flash            (heavy)
+gemini-3.1-flash-lite       (fast)
+gemini-3.1-pro-preview      (heavy)
+gemini-2.5-flash-lite       (fast)
+gemini-3-flash-preview      (heavy)
+gemini-2.5-flash            (fast)
+gemini-3.7-flash            (heavy)
+gemini-3.5-flash            (fast)
+gemini-3.6-flash            (heavy)
+gemini-2.5-pro              (heavy)
+gemini-1.5-flash-latest     (last resort)
+```
+
 
 Get the highest-priority model:
 
-```python
-from googlemodel_samrat import chatmodel
 
-model = chatmodel()
-
-print(model)
 ```
+from googlemodel_samrat import chatmodel
+print(chatmodel())     # gemini-3.5-flash-lite
+```
+
 
 ---
 
 ## 2. 📝 Text Models
 
-**Constant:** `TEXT_MODELS`
+**Constant:** `TEXT_MODELS` (aliases `CHAT_MODELS`)
 
 Text-centric and legacy text endpoints.
-
-```text
-gemini-1.5-pro
-gemini-1.5-flash
-gemini-pro
-```
 
 ---
 
 ## 3. 🎙️ Audio Models
 
-**Constant:** `AUDIO_MODELS`
+**Constant:** `AUDIO_MODELS`
 
-Models intended for real-time audio, transcription, and speech generation.
 
-```text
+```
 gemini-3.8-live
 gemini-3.8-live-extended-thinking
-gemini-3.5-transcribe
+gemini-3.5-live-translate-preview
 gemini-3.1-flash-live-preview
 gemini-3.1-flash-tts-preview
+gemini-3.5-transcribe
+gemini-3.5-transcribe-live
 gemini-2.5-flash-native-audio-preview-12-2025
 gemini-2.5-flash-preview-tts
 gemini-2.5-pro-preview-tts
 ```
 
-Get the highest-priority audio model:
 
-```python
+
+```
 from googlemodel_samrat import audiomodel
-
 print(audiomodel())
 ```
+
 
 ---
 
 ## 4. 🖼️ Image Models
 
-**Constant:** `IMAGE_MODELS`
+**Constant:** `IMAGE_MODELS`
 
-Visual generation models.
 
-```text
+```
 gemini-3.1-flash-image
 gemini-3.1-flash-lite-image
 gemini-3-pro-image
+gemini-2.5-flash-image
 ```
 
-Get the highest-priority image model:
 
-```python
+
+```
 from googlemodel_samrat import imagemodel
-
 print(imagemodel())
 ```
+
 
 ---
 
 ## 5. 🎬 Video Models
 
-**Constant:** `VIDEO_MODELS`
+**Constant:** `VIDEO_MODELS`
 
-Video generation and processing models.
 
-```text
+```
 veo-3.1-generate-preview
+veo-3.1-fast-generate-preview
 veo-3.1-lite-generate-preview
+gemini-omni-1.1-flash
 ```
 
-Get the highest-priority video model:
 
-```python
+
+```
 from googlemodel_samrat import videomodel
-
 print(videomodel())
 ```
+
 
 ---
 
 ## 6. 🔢 Embedding Models
 
-**Constant:** `EMBEDDING_MODELS`
+**Constant:** `EMBEDDING_MODELS`
 
-Embedding models for semantic search, RAG systems, vector databases, and similarity applications.
 
-```text
+```
 gemini-embedding-2-preview
+gemini-embedding-2
 gemini-embedding-001
 ```
 
-Get the highest-priority embedding model:
 
-```python
+
+```
 from googlemodel_samrat import embeddingmodel
-
 print(embeddingmodel())
 ```
+
 
 ---
 
 ## 7. 🎵 Music Models
 
-**Constant:** `MUSIC_MODELS`
+**Constant:** `MUSIC_MODELS`
 
-Specialized music-generation models.
 
-```text
-music-fx-001
-lyria-preview
+```
+lyria-3.5
+lyria-3-clip-preview
+lyria-3-pro-preview
+lyria-realtime-exp
 ```
 
-Get the highest-priority music model:
 
-```python
+
+```
 from googlemodel_samrat import musicmodel
-
 print(musicmodel())
 ```
+
 
 ---
 
 ## 8. 🤖 Robotics Models
 
-**Constant:** `ROBOTICS_MODELS`
+**Constant:** `ROBOTICS_MODELS`
 
-Models designed for robotics and embodied reasoning applications.
 
-```text
+```
 gemini-robotics-er-2-preview
-gemini-robotics-er-1.6-preview
+gemini-robotics-er-2-streaming-preview
 ```
 
-Get the highest-priority robotics model:
 
-```python
+
+```
 from googlemodel_samrat import roboticsmodel
-
 print(roboticsmodel())
 ```
+
 
 ---
 
 ## 9. 🖥️ Computer Use Models
 
-**Constant:** `COMPUTER_USE_MODELS`
+**Constant:** `COMPUTER_USE_MODELS`
 
-Models intended for UI navigation and computer interaction.
 
-```text
-gemini-computer-use-preview
-gemini-desktop-agent-001
+```
+gemini-2.5-computer-use-preview-10-2025
 ```
 
-Get the highest-priority computer-use model:
 
-```python
+
+```
 from googlemodel_samrat import computerusemodel
-
 print(computerusemodel())
 ```
+
 
 ---
 
 ## 10. 🔬 Research Models
 
-**Constant:** `RESEARCH_MODELS`
+**Constant:** `RESEARCH_MODELS`
 
-Models intended for deep analysis and research workflows.
 
-```text
-gemini-3.1-pro-preview
-gemini-deep-research-1.0
+```
+deep-research-max-preview-04-2026
+deep-research-preview-04-2026
 ```
 
-Get the highest-priority research model:
 
-```python
+
+```
 from googlemodel_samrat import researchmodel
-
 print(researchmodel())
 ```
+
 
 ---
 
 ## 11. 🧠 Agent Models
 
-**Constant:** `AGENT_MODELS`
+**Constant:** `AGENT_MODELS`
 
-Models intended for multi-step workflows and agent-based applications.
 
-```text
-gemini-3.8-flash
-gemini-agent-engine-001
+```
+antigravity-preview-09-2026
 ```
 
-Get the highest-priority agent model:
 
-```python
+
+```
 from googlemodel_samrat import agentmodel
-
 print(agentmodel())
 ```
+
 
 ---
 
 ## 12. 🦙 Gemma Models
 
-**Constant:** `GEMMA_MODELS`
+**Constant:** `GEMMA_MODELS`
 
-Open-weight Gemma models for local deployment and customized applications.
 
-```text
-gemma-4
-gemma-3-27b
-gemma-3-9b
-gemma-2-2b
+```
+gemma-4-31b-it
+gemma-4-26b-a4b-it
 ```
 
-Get the highest-priority Gemma model:
 
-```python
+
+```
 from googlemodel_samrat import gemmamodel
-
 print(gemmamodel())
 ```
+
 
 ---
 
@@ -411,21 +510,12 @@ print(gemmamodel())
 
 ## Get the Latest Model From Every Category
 
-You can import the model getters and dynamically select the highest-priority model for each modality.
 
-```python
+```
 from googlemodel_samrat import (
-    chatmodel,
-    audiomodel,
-    imagemodel,
-    videomodel,
-    embeddingmodel,
-    musicmodel,
-    roboticsmodel,
-    computerusemodel,
-    researchmodel,
-    agentmodel,
-    gemmamodel,
+    chatmodel, audiomodel, imagemodel, videomodel,
+    embeddingmodel, musicmodel, roboticsmodel,
+    computerusemodel, researchmodel, agentmodel, gemmamodel,
 )
 
 print(f"Chat:          {chatmodel()}")
@@ -441,103 +531,116 @@ print(f"Agent:         {agentmodel()}")
 print(f"Gemma:         {gemmamodel()}")
 ```
 
+
 ---
 
 # 🧠 Using Chat Models
 
-The model getter can be used directly with `ChatGoogleGenerativeAI`.
 
-```python
+```
 import os
-
 from dotenv import load_dotenv
-from googlemodel_samrat import chatmodel
-from langchain_google_genai import ChatGoogleGenerativeAI
+from googlemodel_samrat import ChatGoogleGenerativeAI, chatmodel
 
 load_dotenv()
 
-api_key = os.getenv("GEMINI_API_KEY")
-
 llm = ChatGoogleGenerativeAI(
+    api_key=os.getenv("GEMINI_API_KEY"),
     model=chatmodel(),
-    api_key=api_key,
 )
 
-response = llm.invoke(
-    "What is the capital of Nepal?"
-)
-
+response = llm.invoke("What is the capital of Nepal?")
 print(response.content)
 ```
+
+
+With streaming:
+
+
+```
+for chunk in llm.stream("Write a haiku about mountains."):
+    print(chunk.content, end="", flush=True)
+```
+
+
+With async:
+
+
+```
+import asyncio
+
+async def main():
+    msg = await llm.ainvoke("Say hi.")
+    print(msg.content)
+
+asyncio.run(main())
+```
+
 
 ---
 
 # 🔢 Using Embeddings
 
-The same approach can be used for Gemini embeddings.
 
-```python
+```
 import os
-
 from dotenv import load_dotenv
-from googlemodel_samrat import embeddingmodel
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from googlemodel_samrat import GoogleGenerativeAIEmbeddings, embeddingmodel
 
 load_dotenv()
 
-api_key = os.getenv("GEMINI_API_KEY")
-
 embedding_model = GoogleGenerativeAIEmbeddings(
+    api_key=os.getenv("GEMINI_API_KEY"),
     model=embeddingmodel(),
-    api_key=api_key,
 )
 
-embedding = embedding_model.embed_query(
-    "My name is Samrat Dhakal."
-)
-
+embedding = embedding_model.embed_query("My name is Samrat Dhakal.")
 print(embedding[:5])
 ```
+
 
 ---
 
 # 🔐 Environment Variables
 
-For applications that use a single API key, store your key in an environment variable rather than hard-coding it.
+Create a `.env` file:
 
-Create a `.env` file:
 
-```env
+```
 GEMINI_API_KEY=your_api_key_here
+GEMINI_API_KEY2=your_backup_api_key_here   # optional
 ```
 
-Then load it:
 
-```python
+Load it:
+
+
+```
 from dotenv import load_dotenv
-
 load_dotenv()
 ```
+
 
 ### ⚠️ Security
 
 **Never commit API keys to GitHub or publish them inside source code.**
 
-Add `.env` to `.gitignore`:
+Add `.env` to `.gitignore`:
 
-```gitignore
+
+```
 .env
 ```
 
-If an API key is accidentally exposed, revoke it and create a replacement key.
+
+If a key is accidentally exposed, revoke it immediately and generate a replacement.
 
 ---
 
 # 🔄 Multi-Key Rotation
 
-Applications that use multiple Gemini API keys can configure a key pool.
 
-```python
+```
 from googlemodel_samrat import ChatGoogleGenerativeAI
 
 llm = ChatGoogleGenerativeAI(
@@ -549,100 +652,90 @@ llm = ChatGoogleGenerativeAI(
     max_output_tokens=500,
 )
 
-response = llm.invoke(
-    "Write a creative science-fiction story opening."
-)
-
+response = llm.invoke("Write a creative science-fiction story opening.")
 print(response.content)
 ```
 
-The library can rotate between the configured keys when supported failures occur.
 
-> **Security:** Never publish real API keys in README files, GitHub repositories, screenshots, or package source code.
+When a key hits quota, the library rotates to the next healthy `(key, model)` pair.
 
 ---
 
 # 💬 Multi-Turn Conversations
 
-Because the package is designed around the LangChain ecosystem, it can be used with LangChain message objects.
 
-```python
+```
 from googlemodel_samrat import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, AIMessage
 
-llm = ChatGoogleGenerativeAI(
-    api_keys=[
-        "YOUR_API_KEY_1",
-        "YOUR_API_KEY_2",
-    ]
-)
+llm = ChatGoogleGenerativeAI(api_key="YOUR_API_KEY")
 
 conversation_history = [
-    HumanMessage(
-        content="Hi, I'm learning Python."
-    ),
-    AIMessage(
-        content="That's awesome! How can I help you with Python today?"
-    ),
-    HumanMessage(
-        content="Can you write a quick Hello World program?"
-    ),
+    HumanMessage(content="Hi, I'm learning Python."),
+    AIMessage(content="That's awesome! How can I help you with Python today?"),
+    HumanMessage(content="Can you write a quick Hello World program?"),
 ]
 
-response = llm.generate_messages(
-    conversation_history
-)
-
-print(response)
+response = llm.invoke(conversation_history)
+print(response.content)
 ```
+
 
 ---
 
 # 📊 Rotation & Failover Statistics
 
-The rotation system can expose statistics about the current key/model state.
 
-```python
+```
 from googlemodel_samrat import ChatGoogleGenerativeAI
 
-llm = ChatGoogleGenerativeAI(
-    api_keys=[
-        "YOUR_API_KEY_1",
-        "YOUR_API_KEY_2",
-    ]
-)
-
+llm = ChatGoogleGenerativeAI(api_key="YOUR_API_KEY")
 llm.invoke("Test query")
 
 stats = llm.get_rotation_stats()
-
 print(stats)
 ```
 
+
 Example structure:
 
-```python
+
+```
 {
     "total_keys": 2,
-    "total_models": 15,
-    "failed_keys": 0,
-    "failed_models": 0,
-    "available_combinations": 30,
-    "current_key_index": 0,
-    "current_model_index": 0,
+    "total_models": 12,
+    "active_keys": 2,
+    "active_models": 11,
+    "cooling_keys": 0,
+    "cooling_models": 1,
+    "cooling_pairs": 1,
+    "available_combinations": 22,
+    "current_key_index": 1,
+    "current_model_index": 5,
+    "key_rotation_enabled": True,
+    "model_rotation_enabled": True,
 }
 ```
+
+
+Attribution after every call:
+
+
+```
+print(llm.last_successful_model)         # e.g. "gemini-3.5-flash-lite"
+print(llm.last_successful_key_index)     # e.g. 0
+```
+
 
 ---
 
 # 🏗️ How the Rotation System Works
 
-The core idea is to treat API keys and models as a pool of available request combinations.
+The core idea is to treat API keys and models as a Cartesian pool of request combinations.
 
-For example:
 
-```text
-Key 1 × Model 1
+```
+Key 1 × Model 1    ← cools together on 429 (per-pair)
 Key 1 × Model 2
 Key 1 × Model 3
        ↓
@@ -655,15 +748,21 @@ Key 3 × Model 2
 Key 3 × Model 3
 ```
 
-When a request fails because of a supported quota, model, or server issue, the library can move to another available combination.
 
-This allows applications to continue operating without manually implementing every fallback path.
+When a request fails:
+
+- **429 (quota)** → the pair `(key, model)` cools. Every other combination stays available.
+- **404 (model gone)** → the model cools for every key.
+- **5xx / timeout** → the key cools for every model.
+
+This means: a single key with N models still rotates; M keys with a single model still rotates; M keys × N models rotates in all directions.
 
 ---
 
 # 🧱 Architecture
 
-```text
+
+```
                     ┌──────────────────────┐
                     │   Application/User   │
                     └──────────┬───────────┘
@@ -686,25 +785,24 @@ This allows applications to continue operating without manually implementing eve
                     └──────────────────┘
 ```
 
+
 ---
 
 # 🛠️ Intended Use Cases
 
-`googlemodel-samrat` can be useful for:
-
-* 🤖 AI chatbots
-* 💬 Conversational applications
-* 📚 RAG applications
-* 🔎 Semantic search systems
-* 🧠 AI agents
-* 🖥️ Computer-use experiments
-* 🎙️ Voice applications
-* 🖼️ Image-generation workflows
-* 🎬 Video-generation workflows
-* 🧪 AI experimentation
-* 🎓 Academic and student projects
-* 🏗️ Prototypes requiring model fallback
-* 🔄 Applications using multiple Gemini API keys
+- 🤖 AI chatbots
+- 💬 Conversational applications
+- 📚 RAG applications
+- 🔎 Semantic search systems
+- 🧠 AI agents
+- 🖥️ Computer-use experiments
+- 🎙️ Voice applications
+- 🖼️ Image-generation workflows
+- 🎬 Video-generation workflows
+- 🧪 AI experimentation
+- 🎓 Academic and student projects
+- 🏗️ Prototypes requiring model fallback
+- 🔄 Applications using multiple Gemini API keys
 
 ---
 
@@ -712,149 +810,176 @@ This allows applications to continue operating without manually implementing eve
 
 ### API Quotas
 
-API key rotation does **not** remove Google's API quotas or usage policies. It only provides application-level handling for multiple configured keys.
+API key rotation does **not** remove Google's API quotas or usage policies. It only provides application-level handling for multiple configured keys.
 
 ### Model Availability
 
 Google may introduce, rename, replace, deprecate, or remove models.
 
-The model lists included in this package should therefore be treated as a snapshot/configuration rather than a guarantee that every listed endpoint will remain available indefinitely.
+The model lists in this package should be treated as a **snapshot/configuration**, not a guarantee that every listed endpoint will remain available indefinitely.
 
 ### Preview Models
 
-Models containing identifiers such as:
-
-```text
--preview
-```
-
-may change or become unavailable as their lifecycle progresses.
+Models containing `-preview` may change or become unavailable as their lifecycle progresses.
 
 ### API Compatibility
 
 Not every model supports every Gemini API capability. A model listed in a category should not automatically be assumed to support every LangChain operation.
 
+### Client State
+
+Rotation state (cooldowns, daily sleeps, failed pairs) is **per client instance** and **in-memory**.
+
+- Create the client **once** and reuse it across requests — do not construct `ChatGoogleGenerativeAI(...)` inside a request handler.
+- State is **not** shared across processes. Multiple workers each keep their own cooldown tracking.
+
 ---
 
 # 📋 Requirements
 
-The package is designed to work with the Google Gemini and LangChain ecosystem.
+Typical dependencies:
 
-Typical dependencies include:
 
-```text
-langchain-google-genai
-google-genai
-google-api-core
-langchain-core
-python-dotenv
+```
+langchain-google-genai>=4.0.0
+python-dotenv>=1.0.0
+google-api-core>=2.15.0
+langchain-core>=0.2.0
+pydantic>=2.0
 ```
 
-Install or update the relevant dependencies with:
 
-```bash
+Upgrade:
+
+
+```
 pip install -U googlemodel-samrat
 ```
+
 
 ---
 
 # 🧪 Development
 
-Clone the repository:
 
-```bash
-git clone YOUR_REPOSITORY_URL
+```
+git clone https://github.com/samrat-dhakal-11/googlemodel-samrat.git
 cd googlemodel-samrat
-```
 
-Create a virtual environment:
-
-```bash
 python -m venv .venv
+source .venv/bin/activate       # macOS/Linux
+# .venv\Scripts\activate        # Windows
+
+pip install -e ".[dev]"
+pytest tests/ -v
+python3 scripts/verify.py
+python3 scripts/stress_test.py
 ```
 
-Activate it on macOS/Linux:
 
-```bash
-source .venv/bin/activate
-```
+Expected:
 
-Activate it on Windows:
-
-```powershell
-.venv\Scripts\activate
-```
-
-Install the project:
-
-```bash
-pip install -e .
-```
+- `pytest tests/ -q` → **163 passed** (offline)
+- `python3 scripts/verify.py` → **16 PASS / 0 FAIL** (live optional)
+- `python3 scripts/stress_test.py` → **64 PASS** (offline, \~0.5 s)
 
 ---
 
 # 📦 Publishing
 
-Build the package:
 
-```bash
+```
+rm -rf dist/ build/ *.egg-info
 python -m build
+twine check dist/*
+twine upload dist/*
 ```
 
-This produces:
 
-```text
+Produces:
+
+
+```
 dist/
 ├── googlemodel_samrat-<version>.tar.gz
 └── googlemodel_samrat-<version>-py3-none-any.whl
 ```
 
-Upload to PyPI using your preferred publishing workflow.
 
-> **Never place PyPI API tokens directly inside shell history, README files, source code, or public repositories.**
+> **Never place PyPI API tokens directly inside shell history, README files, source code, or public repositories.** Paste tokens only at `twine`'s interactive prompt.
 
 ---
 
 # 🗺️ Roadmap
 
-Potential future improvements include:
+- ☑  
 
-* [ ] Automatic model-list synchronization
-* [ ] Automatic Gemini API model discovery
-* [ ] Persistent key health tracking
-* [ ] Configurable retry policies
-* [ ] Async API support
-* [ ] Streaming support
-* [ ] Better telemetry and diagnostics
-* [ ] Model capability detection
-* [ ] Automatic deprecated-model removal
-* [ ] Configuration through `.env`
-* [ ] CLI utilities
-* [ ] Expanded test coverage
-* [ ] Documentation website
+  Async API support
+- ☑  
+
+  Streaming support
+- ☑  
+
+  Expanded test coverage
+- ☑  
+
+  Per-pair cooldowns
+- ☑  
+
+  UTC midnight reset
+- □  
+
+  Automatic model-list synchronization
+- □  
+
+  Automatic Gemini API model discovery
+- □  
+
+  Persistent key health tracking (Redis / file)
+- □  
+
+  Configurable retry policies
+- □  
+
+  Better telemetry and diagnostics
+- □  
+
+  Model capability detection
+- □  
+
+  Automatic deprecated-model removal
+- □  
+
+  Configuration through `.env`
+- □  
+
+  CLI utilities
+- □  
+
+  Documentation website
 
 ---
 
 # 🤝 Contributing
 
-Contributions, issues, and suggestions are welcome.
 
-A typical contribution workflow:
-
-```bash
+```
 git checkout -b feature/my-feature
+# ... make changes, add tests ...
+pytest tests/ -q
+git commit -m "feat: my feature"
+git push origin feature/my-feature
 ```
 
-Make your changes, test them, and submit a pull request.
 
 When reporting an issue, include:
 
-* Python version
-* Package version
-* Operating system
-* Model being used
-* Relevant error message
-* Minimal reproducible example
+- Python version
+- Package version
+- Operating system
+- Model being used
+- Relevant error message
+- Minimal reproducible example
 
 **Never include API keys or other credentials in an issue report.**
 
@@ -862,15 +987,7 @@ When reporting an issue, include:
 
 # 📄 License
 
-Add your project's license here.
-
-Example:
-
-```text
-MIT License
-```
-
-If your project uses a different license, replace the above with the appropriate license information.
+MIT License. See [LICENSE](https://license/) for details.
 
 ---
 
@@ -884,13 +1001,13 @@ Python • Generative AI • Gemini • LangChain • RAG
 
 # ⭐ Support the Project
 
-If you find `googlemodel-samrat` useful:
+If you find `googlemodel-samrat` useful:
 
-* ⭐ Star the repository
-* 🐛 Report bugs
-* 💡 Suggest improvements
-* 🤝 Contribute improvements
-* 📦 Share the package with other developers
+- ⭐ Star the repository
+- 🐛 Report bugs
+- 💡 Suggest improvements
+- 🤝 Contribute improvements
+- 📦 Share the package with other developers
 
 ---
 
@@ -898,37 +1015,53 @@ If you find `googlemodel-samrat` useful:
 
 ### Install
 
-```bash
+
+```
 pip install googlemodel-samrat
 ```
 
+
 ### Get the latest chat model
 
-```python
-from googlemodel_samrat import chatmodel
 
-print(chatmodel())
 ```
+from googlemodel_samrat import chatmodel
+print(chatmodel())     # gemini-3.5-flash-lite
+```
+
 
 ### Get the latest embedding model
 
-```python
-from googlemodel_samrat import embeddingmodel
 
-print(embeddingmodel())
 ```
+from googlemodel_samrat import embeddingmodel
+print(embeddingmodel())     # gemini-embedding-2-preview
+```
+
 
 ### Use with LangChain
 
-```python
+
+```
 from googlemodel_samrat import ChatGoogleGenerativeAI
 
-llm = ChatGoogleGenerativeAI()
-
+llm = ChatGoogleGenerativeAI(api_key="...")
 response = llm.invoke("Hello, Gemini!")
-
 print(response.content)
 ```
+
+
+### LCEL chain
+
+
+```
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+chain = PromptTemplate.from_template("Tell me about {topic}") | llm | StrOutputParser()
+print(chain.invoke({"topic": "RAG"}))
+```
+
 
 ---
 

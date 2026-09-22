@@ -17,6 +17,11 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
+
+warnings.filterwarnings('ignore', message=r'.*fixed sampling defaults.*')
+warnings.filterwarnings('ignore', message=r'.*sampling parameter.*will be ignored.*')
+warnings.filterwarnings('ignore', category=UserWarning, module=r'langchain_google_genai.*')
 from pathlib import Path
 from typing import Any, Optional
 
@@ -190,7 +195,6 @@ else:
 
     llm = ChatGoogleGenerativeAI(
         api_keys=keys,
-        temperature=0.5,
         max_output_tokens=256,   # room for reasoning + output
         suppress_warnings=True,
         verbose=True,

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "googlemodel-samrat"
-version = "0.1.4"
+version = "0.1.5"
 description = "Intelligent Gemini API key and model rotation for resilient free-tier usage"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -25,7 +25,7 @@ dependencies = [
     "langchain-google-genai>=4.0.0",
     "python-dotenv>=1.0.0",
     "google-api-core>=2.15.0",
-    "langchain-core>=0.1.4",
+    "langchain-core>=0.1.5",
     "pydantic>=2.0",
 ]
 
