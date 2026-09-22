@@ -1,222 +1,213 @@
-import logging
-from typing import List, Optional, Any, Union
-from langchain_core.messages import BaseMessage, HumanMessage
+"""
+LangChain-native chat client with automatic key & model rotation.
 
-from .core import BaseGeminiClient
+Fully LCEL-compatible: inherits from BaseChatModel, supports
+`|` pipelines, `.invoke()`, `.stream()`, `.ainvoke()`, `.astream()`.
+"""
+from __future__ import annotations
+
+import os
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional
+
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from pydantic import ConfigDict, Field, PrivateAttr
+
+from .core import (
+    RateLimitManager,
+    RotationExecutionMixin,
+    _silence_sdk_warnings,
+)
+from .exceptions import AllResourcesExhaustedError, ConfigurationError
 from .registry import CHAT_MODELS
 
-logger = logging.getLogger(__name__)
 
-"""
-Chat Client for Gemini Rotator
-===============================
-
-Provides a drop-in replacement for langchain_google_generativeai's
-ChatGoogleGenerativeAI with automatic key/model rotation on failures.
-
-This class mimics the standard LangChain interface while adding
-resilience through the BaseGeminiClient's fallback mechanism.
-
-Usage:
-    >>> from gemini_rotator import ChatGoogleGenerativeAI
-    >>> llm = ChatGoogleGenerativeAI(
-    ...     api_keys=["key1", "key2"],
-    ...     temperature=0.7
-    ... )
-    >>> response = llm.invoke("Explain quantum physics")
-    >>> print(response)
-"""
-
-
-class ChatGoogleGenerativeAI(BaseGeminiClient):
+class ChatGoogleGenerativeAI(BaseChatModel, RotationExecutionMixin):
     """
-    Gemini Chat LLM with automatic key/model rotation.
-    
-    A drop-in replacement for langchain_google_generativeai's
-    ChatGoogleGenerativeAI that adds intelligent failover when
-    rate limits (429), server errors (502/500), or model
-    unavailability occurs.
-    
-    Features:
-        - Automatic rotation across multiple API keys
-        - Automatic fallback to alternative chat models (latest to oldest)
-        - Exponential backoff on transient failures
-        - Full LangChain message interface support
-        - Temperature and generation parameter control
-        
-    Attributes:
-        temperature (float): Sampling temperature (0.0-1.0).
-        kwargs (dict): Additional parameters passed to underlying LLM.
-        
+    Drop-in, LCEL-compatible replacement for `langchain_google_genai.ChatGoogleGenerativeAI`
+    with automatic API key rotation and model fallback.
+
     Example:
-        Simple string prompt:
-            >>> llm = ChatGoogleGenerativeAI(api_keys=["key1"])
-            >>> response = llm.invoke("Hello!")
-            >>> print(response)
-            'Hello! How can I help you today?'
-            
-        With multiple keys and custom temperature:
-            >>> llm = ChatGoogleGenerativeAI(
-            ...     api_keys=["key1", "key2", "key3"],
-            ...     temperature=0.9,
-            ...     top_p=0.95
-            ... )
-            >>> response = llm.invoke("Write a poem about AI")
+        >>> from googlemodel_samrat import ChatGoogleGenerativeAI, chatmodel
+        >>> llm = ChatGoogleGenerativeAI(
+        ...     api_keys=["key1", "key2"],
+        ...     models=[chatmodel(), "gemini-2.5-flash"],
+        ...     temperature=0.7,
+        ... )
+        >>> llm.invoke("Hello!")
     """
-    
-    def __init__(
-        self,
-        api_keys: Optional[List[str]] = None,
-        models: Optional[List[str]] = None,
-        temperature: float = 0.7,
-        **kwargs
-    ):
-        """
-        Initialize the rotating chat client.
-        
-        Args:
-            api_keys: List of Gemini API keys. Defaults to 
-                      GEMINI_API_KEY env var if not provided.
-            models: List of chat-compatible model IDs. 
-                    Defaults to CHAT_MODELS registry if not provided.
-            temperature: Sampling temperature for generation.
-                         0.0 = deterministic, 1.0 = creative.
-            **kwargs: Additional parameters passed to the underlying
-                      langchain_google_generativeai.ChatGoogleGenerativeAI.
-                      Common options: top_p, top_k, max_output_tokens,
-                      safety_settings, stop_sequences.
-                      
-        Raises:
-            ConfigurationError: If no valid API keys are available.
-        """
-        # Default to registry's chat models if none specified
-        active_models = models or CHAT_MODELS
-        
-        # Initialize parent with chat-compatible models only
-        super().__init__(api_keys=api_keys, models=active_models)
-        
-        # Store generation parameters
-        self.temperature = temperature
-        self.kwargs = kwargs
-        
-        logger.info(
-            f"ChatGoogleGenerativeAI initialized | "
-            f"temp={temperature} | "
-            f"{len(active_models)} models | "
-            f"{len(self.api_keys)} keys"
+
+    # pydantic v2 config — allow extra kwargs to pass through to inner client
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
+    # ── public config ────────────────────────────────────────────────
+    api_keys: Optional[List[str]] = Field(default=None)
+    models: Optional[List[str]] = Field(default=None)
+    temperature: float = Field(default=0.7)
+    max_output_tokens: Optional[int] = Field(default=None)
+    top_p: Optional[float] = Field(default=None)
+    top_k: Optional[int] = Field(default=None)
+
+    # rotation tuning
+    cooldown_seconds: float = Field(default=60.0)
+    daily_sleep: bool = Field(default=True)
+    initial_backoff: float = Field(default=1.0)
+    max_backoff: float = Field(default=60.0)
+
+    # behavior
+    verbose: bool = Field(default=False)
+    suppress_warnings: bool = Field(default=True)
+
+    # ── private runtime state ────────────────────────────────────────
+    _manager: Any = PrivateAttr(default=None)
+    _last_successful_model: Optional[str] = PrivateAttr(default=None)
+    _last_successful_key: Optional[str] = PrivateAttr(default=None)
+
+    # ── init ─────────────────────────────────────────────────────────
+    def __init__(self, **data: Any) -> None:
+        super().__init__(**data)
+
+        keys = self.api_keys or [os.getenv("GEMINI_API_KEY", "")]
+        keys = [k for k in keys if k]
+        if not keys:
+            raise ConfigurationError(
+                "No API keys provided. Pass api_keys=[...] or set GEMINI_API_KEY."
+            )
+
+        active_models = self.models or list(CHAT_MODELS)
+
+        self._manager = RateLimitManager(
+            api_keys=keys,
+            models=active_models,
+            cooldown_seconds=self.cooldown_seconds,
+            daily_sleep=self.daily_sleep,
         )
+        # expose to mixin
+        self._initial_backoff = self.initial_backoff
+        self._max_backoff = self.max_backoff
+        self._verbose_rotation = self.verbose
 
-    def invoke(self, prompt: Union[str, List[BaseMessage]], **kwargs) -> str:
-        """
-        Generate a chat response with automatic fallback.
-        
-        Accepts either a simple string prompt or a list of LangChain
-        message objects for multi-turn conversations.
-        
-        Args:
-            prompt: Either a string prompt or list of BaseMessage objects.
-            **kwargs: Override parameters for this specific invocation.
-                      Takes precedence over constructor kwargs.
-                      
-        Returns:
-            str: The generated response content as a plain string.
-            
-        Raises:
-            AllResourcesExhaustedError: If all key/model combos fail.
-            
-        Example:
-            String prompt:
-                >>> response = llm.invoke("What is Python?")
-                
-            Message history:
-                >>> from langchain_core.messages import HumanMessage, AIMessage
-                >>> messages = [
-                ...     HumanMessage(content="Hi"),
-                ...     AIMessage(content="Hello!"),
-                ...     HumanMessage(content="How are you?")
-                ... ]
-                >>> response = llm.invoke(messages)
-        """
-        def _make_request(google_api_key: str, model: str, **local_kwargs) -> Any:
-            """
-            Inner function that creates the actual LangChain client
-            and executes the request. Called by _execute_with_fallback.
-            """
-            # Import here to avoid circular dependencies
-            from langchain_google_genai import (
-                ChatGoogleGenerativeAI as _LC_Client
-            )
-            
-            # Merge constructor kwargs with invocation kwargs
-            merged_kwargs = {**self.kwargs, **local_kwargs}
-            
-            # Create the underlying LangChain client
-            lc_client = _LC_Client(
-                model=model,
-                google_api_key=google_api_key,
-                temperature=self.temperature,
-                **merged_kwargs
-            )
-            
-            # Handle both string and message list inputs
-            if isinstance(prompt, str):
-                messages = [HumanMessage(content=prompt)]
-            else:
-                messages = prompt
-            
-            # Execute and return the raw LangChain response
-            return lc_client.invoke(messages)
+        if self.suppress_warnings:
+            _silence_sdk_warnings()
 
-        # Execute with automatic fallback/rotation
-        response = self._execute_with_fallback(_make_request, **kwargs)
-        
-        # Extract content from LangChain message object
-        if hasattr(response, 'content'):
-            return response.content
-        
-        # Fallback: convert to string
-        return str(response)
+    # ── LangChain metadata ───────────────────────────────────────────
+    @property
+    def _llm_type(self) -> str:
+        return "googlemodel-samrat-chat"
 
-    def generate_messages(
-        self, 
-        messages: List[BaseMessage], 
-        **kwargs
-    ) -> str:
-        """
-        Convenience method for multi-turn conversation generation.
-        
-        Args:
-            messages: List of LangChain BaseMessage objects representing
-                      the conversation history.
-            **kwargs: Override parameters for this invocation.
-            
-        Returns:
-            str: The assistant's response content.
-            
-        Example:
-            >>> from langchain_core.messages import HumanMessage, AIMessage
-            >>> history = [
-            ...     HumanMessage("What's the capital of France?"),
-            ...     AIMessage("Paris"),
-            ...     HumanMessage("What about Spain?")
-            ... ]
-            >>> response = llm.generate_messages(history)
-            >>> print(response)
-            'The capital of Spain is Madrid.'
-        """
-        return self.invoke(messages, **kwargs)
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {
+            "models": self.models or list(CHAT_MODELS),
+            "temperature": self.temperature,
+        }
 
-    def get_rotation_stats(self) -> dict:
-        """
-        Get current rotation statistics for monitoring/debugging.
-        
-        Returns:
-            dict: Dictionary containing rotation state information
-                  including failed keys, failed models, and available
-                  combinations.
-                  
-        Example:
-            >>> stats = llm.get_rotation_stats()
-            >>> print(f"Available combos: {stats['available_combinations']}")
-        """
-        return self.manager.stats
+    # ── attribution metadata ─────────────────────────────────────────
+    @property
+    def last_successful_model(self) -> Optional[str]:
+        return self._last_successful_model
+
+    @property
+    def last_successful_key_index(self) -> Optional[int]:
+        if self._last_successful_key is None or self._manager is None:
+            return None
+        try:
+            return self._manager.api_keys.index(self._last_successful_key)
+        except ValueError:
+            return None
+
+    def get_rotation_stats(self) -> Dict[str, Any]:
+        return self._manager.stats if self._manager else {}
+
+    # ── internal: build inner LangChain client ───────────────────────
+    def _build_lc_client(self, model: str, api_key: str) -> Any:
+        from langchain_google_genai import ChatGoogleGenerativeAI as _LC
+
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "google_api_key": api_key,
+            "temperature": self.temperature,
+        }
+        if self.max_output_tokens is not None:
+            kwargs["max_output_tokens"] = self.max_output_tokens
+        if self.top_p is not None:
+            kwargs["top_p"] = self.top_p
+        if self.top_k is not None:
+            kwargs["top_k"] = self.top_k
+
+        # merge any pydantic extras (safety_settings, stop_sequences, etc.)
+        extras = getattr(self, "model_extra", None) or {}
+        kwargs.update(extras)
+
+        return _LC(**kwargs)
+
+    # ── non-streaming (sync) ─────────────────────────────────────────
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        def _call(*, api_key: str, model: str) -> AIMessage:
+            client = self._build_lc_client(model, api_key)
+            return client.invoke(messages, stop=stop, **kwargs)  # type: ignore[return-value]
+
+        response = self._execute_with_rotation(_call)
+        return ChatResult(generations=[ChatGeneration(message=response)])
+
+    # ── streaming (sync) ─────────────────────────────────────────────
+    def _stream(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        def _stream_call(*, api_key: str, model: str) -> Iterator[AIMessageChunk]:
+            client = self._build_lc_client(model, api_key)
+            return client.stream(messages, stop=stop, **kwargs)
+
+        for chunk in self._execute_stream_with_rotation(_stream_call):
+            yield ChatGenerationChunk(message=chunk)
+
+    # ── async non-streaming ──────────────────────────────────────────
+    async def _agenerate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        async def _acall(*, api_key: str, model: str) -> AIMessage:
+            client = self._build_lc_client(model, api_key)
+            return await client.ainvoke(messages, stop=stop, **kwargs)
+
+        response = await self._aexecute_with_rotation(_acall)
+        return ChatResult(generations=[ChatGeneration(message=response)])
+
+    # ── async streaming ──────────────────────────────────────────────
+    async def _astream(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        def _astream_call(*, api_key: str, model: str) -> AsyncIterator[AIMessageChunk]:
+            client = self._build_lc_client(model, api_key)
+            return client.astream(messages, stop=stop, **kwargs)
+
+        async for chunk in self._aexecute_stream_with_rotation(_astream_call):
+            yield ChatGenerationChunk(message=chunk)
+
+    # ── convenience (kept for backwards compat) ──────────────────────
+    def generate_messages(self, messages: List[BaseMessage], **kwargs: Any) -> str:
+        """Legacy alias for `.invoke(messages)`. Prefer `.invoke()`."""
+        response = self.invoke(messages, **kwargs)
+        return response.content if hasattr(response, "content") else str(response)

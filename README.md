@@ -1,5 +1,19 @@
 # 🚀 googlemodel-samrat
 
+
+## 🆕 What's new in v0.1.4
+
+- **LCEL-native chat client** — `ChatGoogleGenerativeAI` now subclasses `BaseChatModel`, so `prompt | llm | parser` just works.
+- **Streaming** — `.stream()` / `.astream()` yield `AIMessageChunk`s; fallback retries mid-stream if the first chunk fails.
+- **Async** — `.ainvoke()` / `.astream()` supported end-to-end.
+- **Thread-safe rotation** — `RateLimitManager` uses timestamped per-resource cooldowns, safe for FastAPI/Flask.
+- **Embeddings rotation** — new `GoogleGenerativeAIEmbeddings` uses the same multi-key failover engine.
+- **Attribution metadata** — `llm.last_successful_model`, `llm.last_successful_key_index`.
+- **Friendly errors** — `AllResourcesExhaustedError` includes troubleshooting tips.
+- **Midnight sleep** — daily-quota 429s sleep until next UTC midnight instead of retrying forever.
+- **Type hints + `py.typed`** — smooth IDE support.
+- **40+ mock tests** — `pytest tests/ -v` runs in under 1 second with no network.
+
 > **Intelligent Gemini model discovery, multi-key rotation, automatic model fallback, and LangChain integration for Python.**
 
 `googlemodel-samrat` is a Python library designed to make working with the **Google Gemini ecosystem** more resilient and convenient.

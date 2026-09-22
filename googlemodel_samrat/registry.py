@@ -2,8 +2,6 @@
 Google Gemini API - Current Model Registry
 ==========================================
 
-Updated: September 21, 2026
-
 IMPORTANT NOTES:
     - Contains currently listed Gemini/Google AI model IDs across all 12 categories.
     - Ordered strictly from LATEST to OLDEST to support automatic failover rotation.
@@ -14,18 +12,17 @@ IMPORTANT NOTES:
 # 1. CHAT / TEXT / REASONING MODELS (Latest to Oldest)
 # ============================================================
 CHAT_MODELS = [
-    "gemini-3.8-flash",           # Latest frontier flash model
-    "gemini-3.1-pro-preview",     # Pro preview with extended reasoning
-    "gemini-3-flash-preview",     # Next-gen flash preview
     "gemini-3.8-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-3-flash-preview",
     "gemini-3.7-flash",
-    "gemini-3.6-flash",           # Stable advanced flash
-    "gemini-3.5-flash",           # Core balanced flash release
-    "gemini-3.5-flash-lite",      # Lightweight standard flash
-    "gemini-3.1-flash-lite",      # Ultra-lightweight variant
-    "gemini-2.5-pro",             # High-capability pro model
-    "gemini-2.5-flash",           # Balanced speed/capability
-    "gemini-1.5-flash-latest",    # Legacy fallback model
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-1.5-flash-latest",
 ]
 
 TEXT_MODELS = CHAT_MODELS
@@ -35,16 +32,16 @@ TEXT_MODELS = CHAT_MODELS
 # 2. AUDIO / LIVE / SPEECH MODELS
 # ============================================================
 AUDIO_MODELS = [
-    "gemini-3.8-live",                    # Full live audio capability
-    "gemini-3.8-live-extended-thinking",  # Live with extended reasoning
-    "gemini-3.5-live-translate-preview",  # Real-time translation
-    "gemini-3.1-flash-live-preview",      # Lightweight live conversation
-    "gemini-3.1-flash-tts-preview",       # Flash TTS preview
-    "gemini-3.5-transcribe",              # Batch transcription
-    "gemini-3.5-transcribe-live",         # Real-time transcription
-    "gemini-2.5-flash-native-audio-preview-12-2025",  
-    "gemini-2.5-flash-preview-tts",       
-    "gemini-2.5-pro-preview-tts",         
+    "gemini-3.8-live",
+    "gemini-3.8-live-extended-thinking",
+    "gemini-3.5-live-translate-preview",
+    "gemini-3.1-flash-live-preview",
+    "gemini-3.1-flash-tts-preview",
+    "gemini-3.5-transcribe",
+    "gemini-3.5-transcribe-live",
+    "gemini-2.5-flash-native-audio-preview-12-2025",
+    "gemini-2.5-flash-preview-tts",
+    "gemini-2.5-pro-preview-tts",
 ]
 
 
@@ -52,10 +49,10 @@ AUDIO_MODELS = [
 # 3. IMAGE GENERATION / EDITING MODELS
 # ============================================================
 IMAGE_MODELS = [
-    "gemini-3.1-flash-image",       # Nano Banana 2
-    "gemini-3.1-flash-lite-image",  # Nano Banana 2 Lite
-    "gemini-3-pro-image",           # Nano Banana Pro
-    "gemini-2.5-flash-image",       # Nano Banana (original)
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-lite-image",
+    "gemini-3-pro-image",
+    "gemini-2.5-flash-image",
 ]
 
 
@@ -63,10 +60,10 @@ IMAGE_MODELS = [
 # 4. VIDEO / MULTIMODAL GENERATION MODELS
 # ============================================================
 VIDEO_MODELS = [
-    "veo-3.1-generate-preview",         # Standard Veo 3.1
-    "veo-3.1-fast-generate-preview",    # Fast generation variant
-    "veo-3.1-lite-generate-preview",    # Lightweight variant
-    "gemini-omni-1.1-flash",            # Multimodal omni model
+    "veo-3.1-generate-preview",
+    "veo-3.1-fast-generate-preview",
+    "veo-3.1-lite-generate-preview",
+    "gemini-omni-1.1-flash",
 ]
 
 
@@ -74,9 +71,9 @@ VIDEO_MODELS = [
 # 5. EMBEDDING MODELS
 # ============================================================
 EMBEDDING_MODELS = [
-    "gemini-embedding-2-preview",   # Next-gen multimodal embeddings
-    "gemini-embedding-2",           # Standard multimodal embeddings
-    "gemini-embedding-001",         # Standard text embeddings
+    "gemini-embedding-2-preview",
+    "gemini-embedding-2",
+    "gemini-embedding-001",
 ]
 
 
@@ -84,10 +81,10 @@ EMBEDDING_MODELS = [
 # 6. MUSIC GENERATION MODELS
 # ============================================================
 MUSIC_MODELS = [
-    "lyria-3.5",                # Latest Lyria model
-    "lyria-3-clip-preview",     # Short clip generation
-    "lyria-3-pro-preview",      # Professional-grade music
-    "lyria-realtime-exp",       # Real-time music experimentation
+    "lyria-3.5",
+    "lyria-3-clip-preview",
+    "lyria-3-pro-preview",
+    "lyria-realtime-exp",
 ]
 
 
@@ -95,8 +92,8 @@ MUSIC_MODELS = [
 # 7. ROBOTICS MODELS
 # ============================================================
 ROBOTICS_MODELS = [
-    "gemini-robotics-er-2-preview",          # Embodied Reasoning v2
-    "gemini-robotics-er-2-streaming-preview", # Streaming ER v2
+    "gemini-robotics-er-2-preview",
+    "gemini-robotics-er-2-streaming-preview",
 ]
 
 
@@ -104,7 +101,7 @@ ROBOTICS_MODELS = [
 # 8. COMPUTER USE MODELS
 # ============================================================
 COMPUTER_USE_MODELS = [
-    "gemini-2.5-computer-use-preview-10-2025",  
+    "gemini-2.5-computer-use-preview-10-2025",
 ]
 
 
@@ -112,8 +109,8 @@ COMPUTER_USE_MODELS = [
 # 9. DEEP RESEARCH MODELS
 # ============================================================
 RESEARCH_MODELS = [
-    "deep-research-max-preview-04-2026", 
-    "deep-research-preview-04-2026",     
+    "deep-research-max-preview-04-2026",
+    "deep-research-preview-04-2026",
 ]
 
 
@@ -121,7 +118,7 @@ RESEARCH_MODELS = [
 # 10. MANAGED AGENT MODELS
 # ============================================================
 AGENT_MODELS = [
-    "antigravity-preview-09-2026",  
+    "antigravity-preview-09-2026",
 ]
 
 
@@ -129,8 +126,8 @@ AGENT_MODELS = [
 # 11. GEMMA OPEN-WEIGHT MODELS
 # ============================================================
 GEMMA_MODELS = [
-    "gemma-4-31b-it",       
-    "gemma-4-26b-a4b-it",   
+    "gemma-4-31b-it",
+    "gemma-4-26b-a4b-it",
 ]
 
 
@@ -139,7 +136,7 @@ GEMMA_MODELS = [
 # ============================================================
 ALL_CURRENT_MODELS = {
     "chat":         CHAT_MODELS,
-    "text":         TEXT_MODELS,       
+    "text":         TEXT_MODELS,
     "audio":        AUDIO_MODELS,
     "image":        IMAGE_MODELS,
     "video":        VIDEO_MODELS,
@@ -234,7 +231,7 @@ def get_model_count() -> int:
 
 def print_all_models() -> None:
     print("\n" + "=" * 70)
-    print("🤖 GOOGLE GEMINI MODEL REGISTRY (Latest to Oldest Priority)")
+    print("GOOGLE GEMINI MODEL REGISTRY (Latest to Oldest Priority)")
     print("=" * 70)
     for category, models in ALL_CURRENT_MODELS.items():
         print(f"\n[{category.upper()} - {len(models)} models]")

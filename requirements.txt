@@ -1,18 +1,6 @@
-# Gemini Rotator Dependencies
-# ==========================
-# Install with: pip install -r requirements.txt
-
-# Core LangChain integration for Gemini (Matches pyproject.toml)
+# googlemodel-samrat runtime dependencies
 langchain-google-genai>=4.0.0
-
-# Environment variable loading
 python-dotenv>=1.0.0
-
-# Google API core exceptions and transport
 google-api-core>=2.15.0
-
-# LangChain core message types
 langchain-core>=0.2.0
-
-# Optional: For async support (future versions)
-# aiohttp>=3.9.0
+pydantic>=2.0
