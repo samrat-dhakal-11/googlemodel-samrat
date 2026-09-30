@@ -22,7 +22,8 @@ from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 
 from googlemodel_samrat import ChatGoogleGenerativeAI
 from googlemodel_samrat.exceptions import AllResourcesExhaustedError
-
+import warnings
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 # ─────────────────────────────────────────────────────────────────────
 # Fakes
@@ -341,3 +342,172 @@ def test_llm_type_is_distinct(monkeypatch):
     )
     llm = ChatGoogleGenerativeAI(api_keys=["k1"], models=["m1"])
     assert llm._llm_type == "googlemodel-samrat-chat"
+
+# ─────────────────────────────────────────────────────────────────────
+# v0.2.0: warning suppression at CALL time (not just import time)
+# ─────────────────────────────────────────────────────────────────────
+def test_afc_and_sampling_warnings_suppressed_during_call(monkeypatch):
+    def behavior(kwargs, messages):
+        warnings.warn(
+            "Direct use of automatic function calling (AFC) in "
+            "Models.generate_content is not recommended",
+            UserWarning,
+        )
+        warnings.warn(
+            "Model 'm1' uses fixed sampling defaults; the sampling "
+            "parameter(s) temperature will be ignored.",
+            UserWarning,
+        )
+        return AIMessage(content="ok")
+
+    monkeypatch.setattr(
+        "langchain_google_genai.ChatGoogleGenerativeAI",
+        _fake_lc_factory(invoke_behavior=behavior),
+    )
+    llm = ChatGoogleGenerativeAI(api_keys=["k1"], models=["m1"])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        llm.invoke("hi")
+    msgs = [str(w.message) for w in caught]
+    assert not [m for m in msgs if "AFC" in m or "fixed sampling" in m]
+
+def test_warnings_visible_when_suppression_disabled(monkeypatch):
+    def behavior(kwargs, messages):
+        warnings.warn("fixed sampling defaults test", UserWarning)
+        return AIMessage(content="ok")
+
+    monkeypatch.setattr(
+        "langchain_google_genai.ChatGoogleGenerativeAI",
+        _fake_lc_factory(invoke_behavior=behavior),
+    )
+    llm = ChatGoogleGenerativeAI(
+        api_keys=["k1"], models=["m1"], suppress_warnings=False
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        llm.invoke("hi")
+    assert any("fixed sampling" in str(w.message) for w in caught)
+
+# ─────────────────────────────────────────────────────────────────────
+# v0.2.0: ONE LangSmith trace per call (no duplicate root runs)
+# ─────────────────────────────────────────────────────────────────────
+def test_inner_protected_generate_used_no_second_root_run(monkeypatch):
+    """The inner client's PUBLIC .invoke() starts its own traced run —
+    the root cause of duplicate LangSmith traces. The wrapper must
+    drive the inner client via its protected _generate instead."""
+    calls = {"public_invoke": 0, "protected_generate": 0}
+
+    class FakeLC:
+        def __init__(self, **kw):
+            self.kwargs = kw
+
+        def invoke(self, messages, **kw):
+            calls["public_invoke"] += 1
+            return AIMessage(content="via-public")
+
+        def _generate(self, messages, stop=None, run_manager=None, **kw):
+            calls["protected_generate"] += 1
+            return ChatResult(
+                generations=[ChatGeneration(message=AIMessage(content="via-protected"))]
+            )
+
+        def stream(self, messages, **kw):
+            yield AIMessageChunk(content="ok")
+
+        async def ainvoke(self, messages, **kw):
+            return self.invoke(messages, **kw)
+
+        async def astream(self, messages, **kw):
+            for c in self.stream(messages, **kw):
+                yield c
+
+    monkeypatch.setattr("langchain_google_genai.ChatGoogleGenerativeAI", FakeLC)
+    llm = ChatGoogleGenerativeAI(api_keys=["k1"], models=["m1"])
+    msg = llm.invoke("hi")
+    assert msg.content == "via-protected"
+    assert calls["protected_generate"] == 1
+    assert calls["public_invoke"] == 0        # <- no second traced run
+
+def test_inner_protected_stream_used(monkeypatch):
+    calls = {"public_stream": 0, "protected_stream": 0}
+
+    class FakeLC:
+        def __init__(self, **kw):
+            self.kwargs = kw
+
+        def stream(self, messages, **kw):
+            calls["public_stream"] += 1
+            yield AIMessageChunk(content="via-public")
+
+        def _stream(self, messages, stop=None, run_manager=None, **kw):
+            calls["protected_stream"] += 1
+            yield ChatGenerationChunk(message=AIMessageChunk(content="via-protected"))
+
+        async def ainvoke(self, messages, **kw):
+            return AIMessage(content="ok")
+
+        async def astream(self, messages, **kw):
+            yield AIMessageChunk(content="ok")
+
+    monkeypatch.setattr("langchain_google_genai.ChatGoogleGenerativeAI", FakeLC)
+    llm = ChatGoogleGenerativeAI(api_keys=["k1"], models=["m1"])
+    text = "".join(c.content for c in llm.stream("hi"))
+    assert text == "via-protected"
+    assert calls["protected_stream"] == 1
+    assert calls["public_stream"] == 0
+
+def test_midstream_failure_propagates_no_duplicate_output(monkeypatch):
+    """Once chunks have been delivered, rotating would duplicate
+    already-yielded content — the error must propagate instead."""
+    def stream_behavior(kwargs, messages):
+        yield AIMessageChunk(content="partial")
+        raise Exception("connection reset mid-stream")
+
+    monkeypatch.setattr(
+        "langchain_google_genai.ChatGoogleGenerativeAI",
+        _fake_lc_factory(stream_behavior=stream_behavior),
+    )
+    llm = ChatGoogleGenerativeAI(api_keys=["k1", "k2"], models=["m1"])
+    received = []
+    with pytest.raises(Exception):
+        for c in llm.stream("hi"):
+            received.append(c.content)
+    assert received == ["partial"]          # no duplicated retry output
+
+# ─────────────────────────────────────────────────────────────────────
+# v0.2.0: public conveniences
+# ─────────────────────────────────────────────────────────────────────
+def test_repr_is_compact_and_useful(monkeypatch):
+    monkeypatch.setattr(
+        "langchain_google_genai.ChatGoogleGenerativeAI",
+        _fake_lc_factory(),
+    )
+    llm = ChatGoogleGenerativeAI(api_keys=["k1", "k2"], models=["m1", "m2"])
+    r = repr(llm)
+    assert "ChatGoogleGenerativeAI" in r
+    assert "keys=2" in r
+    assert "models=2" in r
+    assert "last_model=None" in r
+
+def test_failed_pairs_property_and_reset_failures(monkeypatch):
+    seen = []
+
+    def behavior(kwargs, messages):
+        seen.append(kwargs["google_api_key"])
+        if len(seen) == 1:
+            raise Exception("429 quota exceeded")
+        return AIMessage(content="ok")
+
+    monkeypatch.setattr(
+        "langchain_google_genai.ChatGoogleGenerativeAI",
+        _fake_lc_factory(invoke_behavior=behavior),
+    )
+    llm = ChatGoogleGenerativeAI(
+        api_keys=["k1", "k2"], models=["m1"],
+        initial_backoff=0.0, max_backoff=0.0,
+    )
+    assert llm.failed_pairs == []
+    llm.invoke("hi")
+    assert llm.failed_pairs == [("k1", "m1")]
+    llm.reset_failures()
+    assert llm.failed_pairs == []

@@ -3,13 +3,15 @@ googlemodel-samrat
 ==================
 Intelligent Gemini API key & model rotation for resilient usage.
 
-Features:
-    - LCEL-compatible ChatGoogleGenerativeAI (subclass of BaseChatModel)
-    - Rotation-capable GoogleGenerativeAIEmbeddings
-    - Thread-safe key/model pool with timestamped cooldowns
-    - "Midnight sleep" for daily quotas, jittered backoff for transient errors
-    - Full sync + async + streaming support
-    - Attribution metadata (`last_successful_model`, `last_successful_key_index`)
+v0.2.0 highlights:
+    - RotatingModelName: chatmodel()/embeddingmodel() return a str
+      subclass carrying its failover pool — pass it to OUR clients
+      as model= and the whole pool rotates.
+    - googlemodel_samrat.langchain: one-line import shim
+        from googlemodel_samrat.langchain import ChatGoogleGenerativeAI
+    - ONE LangSmith trace per call (no duplicate root runs)
+    - Google retryDelay hints honored on 429s
+    - AFC / fixed-sampling warnings silenced at call sites
 """
 import logging as _logging
 
@@ -31,6 +33,7 @@ from .exceptions import (
 )
 from .core import RateLimitManager, RotationExecutionMixin
 from .registry import (
+    RotatingModelName,
     # helpers
     print_all_models,
     get_models,
@@ -65,7 +68,7 @@ from .registry import (
     ALL_CURRENT_MODELS,
 )
 
-__version__ = "0.1.5"
+__version__ = "0.2.0"
 __author__ = "Samrat Dhakal"
 __license__ = "MIT"
 
@@ -76,6 +79,8 @@ __all__ = [
     # engine
     "RateLimitManager",
     "RotationExecutionMixin",
+    # v0.2.0 flagship
+    "RotatingModelName",
     # errors
     "GeminiRotatorError",
     "AllResourcesExhaustedError",

@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import sys
 import warnings
+import importlib.resources
 
 warnings.filterwarnings('ignore', message=r'.*fixed sampling defaults.*')
 warnings.filterwarnings('ignore', message=r'.*sampling parameter.*will be ignored.*')
@@ -258,3 +259,12 @@ else:
 print()
 
 sys.exit(1 if _counts[FAIL] else 0)
+
+# ── py.typed ships (PEP 561) ──────────────────────────────────────────
+try:
+    _py_typed_ok = (
+        importlib.resources.files("googlemodel_samrat") / "py.typed"
+    ).is_file()
+except Exception:
+    _py_typed_ok = False
+check("py.typed marker present in package (PEP 561)", _py_typed_ok)

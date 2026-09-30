@@ -185,3 +185,22 @@ def test_get_model_category_for_chat_model():
 def test_no_private_names_in_all():
     for name in gms.__all__:
         assert not name.startswith("_"), f"{name} should not be public"
+
+# ─────────────────────────────────────────────────────────────────────
+# v0.2.0: registry order + RotatingModelName export
+# ─────────────────────────────────────────────────────────────────────
+def test_embeddingmodel_is_first_of_list():
+    assert gms.embeddingmodel() == gms.EMBEDDING_MODELS[0]
+    assert gms.embeddingmodel() == "gemini-embedding-001"   # GA first
+
+def test_embedding_models_ga_first():
+    assert gms.EMBEDDING_MODELS[0] == "gemini-embedding-001"
+    assert "preview" not in gms.EMBEDDING_MODELS[0]
+
+def test_chat_models_start_with_lites():
+    assert gms.CHAT_MODELS[0] == "gemini-3.5-flash-lite"
+    assert gms.CHAT_MODELS[1] == "gemini-3.1-flash-lite"
+
+def test_rotating_model_name_exported():
+    assert hasattr(gms, "RotatingModelName")
+    assert "RotatingModelName" in gms.__all__

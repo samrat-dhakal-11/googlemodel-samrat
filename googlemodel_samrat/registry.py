@@ -6,20 +6,67 @@ IMPORTANT NOTES:
     - Contains currently listed Gemini/Google AI model IDs across all 12 categories.
     - Ordered strictly from LATEST to OLDEST to support automatic failover rotation.
     - Includes helper getter functions for all categories.
+    - v0.2.0: getters return RotatingModelName — a str subclass that
+      carries its failover pool, so rotation travels with the name.
 """
 
+from __future__ import annotations
+
+from typing import Any, List, Optional
+
+
 # ============================================================
-# 1. CHAT / TEXT / REASONING MODELS (Latest to Oldest)
+# 0. ROTATING MODEL NAME (v0.2.0 flagship)
 # ============================================================
-# Order = failover priority.
-# Alternates FAST (high-RPD) with POWERFUL (low-RPD) so the first
-# request succeeds on a fast model, and the first *fallback* still
-# gets a capable model rather than another fast one that's also spent.
+class RotatingModelName(str):
+    """A ``str`` that carries its rotation context.
+
+    Behaves EXACTLY like ``str`` for every existing use::
+
+        len(name), name.upper(), f"{name}", name in CHAT_MODELS,
+        client(model=name), name == "gemini-3.5-flash-lite"
+
+    ...but it also carries the full failover pool it came from, so
+    rotation-aware clients (``googlemodel_samrat.ChatGoogleGenerativeAI``
+    and ``googlemodel_samrat.GoogleGenerativeAIEmbeddings``) adopt the
+    whole pool automatically when you pass it as ``model=``::
+
+        llm = ChatGoogleGenerativeAI(api_key="...", model=chatmodel())
+        # -> models pool = ALL of CHAT_MODELS, not just one model
+
+    Stock (non-rotation-aware) clients still receive a perfectly
+    ordinary string and keep working unchanged — they just don't
+    rotate, which is exactly why ``googlemodel_samrat.langchain``
+    exists as a one-line migration path.
+    """
+
+    def __new__(
+        cls,
+        name: str,
+        *,
+        pool: Optional[List[str]] = None,
+        manager: Any = None,
+    ) -> "RotatingModelName":
+        obj = super().__new__(cls, name)
+        obj._pool = list(pool) if pool else [str(name)]
+        obj._manager = manager
+        return obj
+
+    @property
+    def rotation_pool(self) -> List[str]:
+        """The full failover pool (category order) this name came from."""
+        return list(self._pool)
+
+
+# ============================================================
+# 1. CHAT / TEXT / REASONING MODELS (failover priority)
+# ============================================================
+# v0.2.0 order: the two flash-lites first for maximum free-tier RPD
+# headroom, then the alternating fast/heavy flow.
 CHAT_MODELS = [
-    # Order = failover priority. Alternating fast/heavy.
     "gemini-3.5-flash-lite",       # 1.  fast  — first choice
-    "gemini-3.8-flash",            # 2.  heavy — next
-    "gemini-3.1-flash-lite",       # 3.  fast
+    "gemini-3.1-flash-lite",       # 2.  fast  — second lite
+    "gemini-3.8-flash",            # 3.  heavy
     "gemini-3.1-pro-preview",      # 4.  heavy
     "gemini-2.5-flash-lite",       # 5.  fast
     "gemini-3-flash-preview",      # 6.  heavy
@@ -32,7 +79,6 @@ CHAT_MODELS = [
 ]
 
 TEXT_MODELS = CHAT_MODELS
-
 
 # ============================================================
 # 2. AUDIO / LIVE / SPEECH MODELS
@@ -50,7 +96,6 @@ AUDIO_MODELS = [
     "gemini-2.5-pro-preview-tts",
 ]
 
-
 # ============================================================
 # 3. IMAGE GENERATION / EDITING MODELS
 # ============================================================
@@ -60,7 +105,6 @@ IMAGE_MODELS = [
     "gemini-3-pro-image",
     "gemini-2.5-flash-image",
 ]
-
 
 # ============================================================
 # 4. VIDEO / MULTIMODAL GENERATION MODELS
@@ -72,16 +116,18 @@ VIDEO_MODELS = [
     "gemini-omni-1.1-flash",
 ]
 
-
 # ============================================================
 # 5. EMBEDDING MODELS
 # ============================================================
+# v0.2.0 order: GA model FIRST — live testing hit back-to-back 429s
+# because the preview models sat on top of the list. Preview models
+# have lower per-project quotas than GA models. Same philosophy as
+# CHAT_MODELS: abundant-quota resource first.
 EMBEDDING_MODELS = [
-    "gemini-embedding-2-preview",
-    "gemini-embedding-2",
-    "gemini-embedding-001",
+    "gemini-embedding-001",        # GA — 100 RPM, most free-tier headroom
+    "gemini-embedding-2",          # newer
+    "gemini-embedding-2-preview",  # preview — lowest quota tier
 ]
-
 
 # ============================================================
 # 6. MUSIC GENERATION MODELS
@@ -93,7 +139,6 @@ MUSIC_MODELS = [
     "lyria-realtime-exp",
 ]
 
-
 # ============================================================
 # 7. ROBOTICS MODELS
 # ============================================================
@@ -102,14 +147,12 @@ ROBOTICS_MODELS = [
     "gemini-robotics-er-2-streaming-preview",
 ]
 
-
 # ============================================================
 # 8. COMPUTER USE MODELS
 # ============================================================
 COMPUTER_USE_MODELS = [
     "gemini-2.5-computer-use-preview-10-2025",
 ]
-
 
 # ============================================================
 # 9. DEEP RESEARCH MODELS
@@ -119,14 +162,12 @@ RESEARCH_MODELS = [
     "deep-research-preview-04-2026",
 ]
 
-
 # ============================================================
 # 10. MANAGED AGENT MODELS
 # ============================================================
 AGENT_MODELS = [
     "antigravity-preview-09-2026",
 ]
-
 
 # ============================================================
 # 11. GEMMA OPEN-WEIGHT MODELS
@@ -135,7 +176,6 @@ GEMMA_MODELS = [
     "gemma-4-31b-it",
     "gemma-4-26b-a4b-it",
 ]
-
 
 # ============================================================
 # 12. COMPLETE MODEL REGISTRY DICTIONARY
@@ -155,66 +195,74 @@ ALL_CURRENT_MODELS = {
     "gemma":        GEMMA_MODELS,
 }
 
-
 # ============================================================
 # 13. CONVENIENCE HELPERS FOR ALL 12 CATEGORIES
 # ============================================================
+# v0.2.0: every getter returns a RotatingModelName — a plain str for
+# all existing code, but carrying its full failover pool so rotation
+# travels with the name into any rotation-aware client:
+#
+#     llm = ChatGoogleGenerativeAI(api_key="...", model=chatmodel())
+#     # -> the WHOLE CHAT_MODELS pool rotates, not just one model.
 
-def chatmodel() -> str:
-    """Returns the newest top-priority chat model."""
+def chatmodel() -> RotatingModelName:
+    """Newest top-priority chat model (carries the CHAT_MODELS pool)."""
     if not CHAT_MODELS: raise ValueError("No chat models registered.")
-    return CHAT_MODELS[0]
+    return RotatingModelName(CHAT_MODELS[0], pool=CHAT_MODELS)
 
-def audiomodel() -> str:
-    """Returns the newest top-priority audio model."""
+def audiomodel() -> RotatingModelName:
+    """Newest top-priority audio model (carries the AUDIO_MODELS pool)."""
     if not AUDIO_MODELS: raise ValueError("No audio models registered.")
-    return AUDIO_MODELS[0]
+    return RotatingModelName(AUDIO_MODELS[0], pool=AUDIO_MODELS)
 
-def imagemodel() -> str:
-    """Returns the newest top-priority image model."""
+def imagemodel() -> RotatingModelName:
+    """Newest top-priority image model (carries the IMAGE_MODELS pool)."""
     if not IMAGE_MODELS: raise ValueError("No image models registered.")
-    return IMAGE_MODELS[0]
+    return RotatingModelName(IMAGE_MODELS[0], pool=IMAGE_MODELS)
 
-def videomodel() -> str:
-    """Returns the newest top-priority video model."""
+def videomodel() -> RotatingModelName:
+    """Newest top-priority video model (carries the VIDEO_MODELS pool)."""
     if not VIDEO_MODELS: raise ValueError("No video models registered.")
-    return VIDEO_MODELS[0]
+    return RotatingModelName(VIDEO_MODELS[0], pool=VIDEO_MODELS)
 
-def embeddingmodel() -> str:
-    """Returns the newest top-priority embedding model."""
+def embeddingmodel() -> RotatingModelName:
+    """Newest top-priority embedding model (carries the EMBEDDING_MODELS pool).
+
+    v0.2.0: returns the GA model `gemini-embedding-001` first —
+    live testing showed the preview models 429 on a normal day.
+    """
     if not EMBEDDING_MODELS: raise ValueError("No embedding models registered.")
-    return EMBEDDING_MODELS[0]
+    return RotatingModelName(EMBEDDING_MODELS[0], pool=EMBEDDING_MODELS)
 
-def musicmodel() -> str:
-    """Returns the newest top-priority music model."""
+def musicmodel() -> RotatingModelName:
+    """Newest top-priority music model (carries the MUSIC_MODELS pool)."""
     if not MUSIC_MODELS: raise ValueError("No music models registered.")
-    return MUSIC_MODELS[0]
+    return RotatingModelName(MUSIC_MODELS[0], pool=MUSIC_MODELS)
 
-def roboticsmodel() -> str:
-    """Returns the newest top-priority robotics model."""
+def roboticsmodel() -> RotatingModelName:
+    """Newest top-priority robotics model (carries the ROBOTICS_MODELS pool)."""
     if not ROBOTICS_MODELS: raise ValueError("No robotics models registered.")
-    return ROBOTICS_MODELS[0]
+    return RotatingModelName(ROBOTICS_MODELS[0], pool=ROBOTICS_MODELS)
 
-def computerusemodel() -> str:
-    """Returns the newest top-priority computer use model."""
+def computerusemodel() -> RotatingModelName:
+    """Newest top-priority computer use model (carries the pool)."""
     if not COMPUTER_USE_MODELS: raise ValueError("No computer use models registered.")
-    return COMPUTER_USE_MODELS[0]
+    return RotatingModelName(COMPUTER_USE_MODELS[0], pool=COMPUTER_USE_MODELS)
 
-def researchmodel() -> str:
-    """Returns the newest top-priority deep research model."""
+def researchmodel() -> RotatingModelName:
+    """Newest top-priority deep research model (carries the pool)."""
     if not RESEARCH_MODELS: raise ValueError("No research models registered.")
-    return RESEARCH_MODELS[0]
+    return RotatingModelName(RESEARCH_MODELS[0], pool=RESEARCH_MODELS)
 
-def agentmodel() -> str:
-    """Returns the newest top-priority agent model."""
+def agentmodel() -> RotatingModelName:
+    """Newest top-priority agent model (carries the AGENT_MODELS pool)."""
     if not AGENT_MODELS: raise ValueError("No agent models registered.")
-    return AGENT_MODELS[0]
+    return RotatingModelName(AGENT_MODELS[0], pool=AGENT_MODELS)
 
-def gemmamodel() -> str:
-    """Returns the newest top-priority Gemma model."""
+def gemmamodel() -> RotatingModelName:
+    """Newest top-priority Gemma model (carries the GEMMA_MODELS pool)."""
     if not GEMMA_MODELS: raise ValueError("No Gemma models registered.")
-    return GEMMA_MODELS[0]
-
+    return RotatingModelName(GEMMA_MODELS[0], pool=GEMMA_MODELS)
 
 # ============================================================
 # 14. GENERAL REGISTRY UTILITIES

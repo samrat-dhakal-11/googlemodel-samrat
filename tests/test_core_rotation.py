@@ -238,3 +238,32 @@ def test_stats_cooling_pairs_count():
     mgr.mark_failed("k1", "m1", Exception("429 quota"))
     mgr.mark_failed("k2", "m2", Exception("429 quota"))
     assert mgr.stats["cooling_pairs"] == 2
+
+# ─────────────────────────────────────────────────────────────────────
+# v0.2.0: Google retryDelay hint honored on 429s
+# ─────────────────────────────────────────────────────────────────────
+def test_retry_delay_hint_shortens_cooldown():
+    mgr = RateLimitManager(api_keys=["k1"], models=["m1"], cooldown_seconds=60)
+    mgr.mark_failed("k1", "m1", Exception('429 quota exceeded ... "retryDelay": "10s"'))
+    st = mgr._pair_state[("k1", "m1")]
+    remaining = st.cooldown_until - time.time()
+    assert 10.0 < remaining <= 11.5      # ~11s (hint + 1s), NOT 60s
+
+def test_retry_delay_hint_from_plain_text():
+    mgr = RateLimitManager(api_keys=["k1"], models=["m1"], cooldown_seconds=60)
+    mgr.mark_failed("k1", "m1", Exception("429 RESOURCE_EXHAUSTED ... retry in 38s"))
+    st = mgr._pair_state[("k1", "m1")]
+    remaining = st.cooldown_until - time.time()
+    assert 38.0 < remaining <= 39.5      # ~39s, NOT 60s
+
+def test_no_hint_uses_full_cooldown():
+    mgr = RateLimitManager(api_keys=["k1"], models=["m1"], cooldown_seconds=60)
+    mgr.mark_failed("k1", "m1", Exception("429 quota exceeded"))
+    st = mgr._pair_state[("k1", "m1")]
+    assert st.cooldown_until - time.time() > 55   # full 60s
+
+def test_retry_hint_capped_at_cooldown_seconds():
+    mgr = RateLimitManager(api_keys=["k1"], models=["m1"], cooldown_seconds=30)
+    mgr.mark_failed("k1", "m1", Exception('429 ... "retryDelay": "3600s"'))
+    st = mgr._pair_state[("k1", "m1")]
+    assert st.cooldown_until - time.time() <= 30.5   # capped, never 3600s
